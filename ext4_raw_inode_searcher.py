@@ -68,7 +68,12 @@ def readSuperblockInfo ( pathToDevice ):
     # Offset of a superblock
     sb_offset=0x400
     file.seek(sb_offset)
+
+    # whole superblock for ext4_inode_checksum_calculator module
+    whole_superblock=file.read(1024)
+
     # Array with all we need
+    file.seek(sb_offset)
     bytes=file.read(0x68+0x10)
     #print(bytes.encode('hex'))
     file.close()
@@ -87,8 +92,8 @@ def readSuperblockInfo ( pathToDevice ):
     # is correct by executing ls -l /dev/disk/by-uuid/
     # and also we do not need to reverse it since it is not little endian
     s_uuid=bytes[0x68:0x68+16]
-    #print(list(s_uuid))
-    sb_info=[s_blocks_per_group, s_inodes_per_group, s_inode_size, block_size]
+
+    sb_info=[s_blocks_per_group, s_inodes_per_group, s_inode_size, block_size, whole_superblock]
     return sb_info
 
 
@@ -169,7 +174,7 @@ def readInode ( pathToDevice, sb_info, inodeNum, inode_table_offset ):
     f = open("output.bin","w+b")
     f.write(bytes)
     f.close()
-    return 1
+    return bytes
 
 
 # error message if too few arguments given
@@ -187,11 +192,13 @@ def main ( args ):
     pathToFile=args[1]
     pathToDevice=args[2]
 
-    inodeNum=readInodeNumber(pathToFile)
-    print("Inode number: "+str(inodeNum))
+    inode_num=readInodeNumber(pathToFile)
+    print("Inode number: "+str(inode_num))
     print("")
 
     sb_info=readSuperblockInfo(pathToDevice)
+
+
     print("Superblock info:")
     print("Blocks per group: "+str(sb_info[0]))
     print("Inodes per group: "+str(sb_info[1]))
@@ -199,17 +206,23 @@ def main ( args ):
     print("Block size: "+str(sb_info[3]))
     print("")
 
-    inode_table_offset=findInodeTableOffset(pathToDevice,inodeNum,sb_info)
+    inode_table_offset=findInodeTableOffset(pathToDevice,inode_num,sb_info)
     print("Inode table offset: "+str(inode_table_offset))
 
-    readInode(pathToDevice,sb_info,inodeNum,inode_table_offset)
+    raw_inode=readInode(pathToDevice,sb_info,inode_num,inode_table_offset)
     print("")
     print("SEE THE OUTPUT.BIN FILE FOR ANALYSIS OF YOUR INODE")
 
+    # return for ext4_inode_checksum_calculator module
+    raw_superblock = sb_info[4] # for ext4_inode_checksum_calculator
+    s_inode_size=sb_info[2]
+    return [inode_num, s_inode_size, raw_inode, raw_superblock]
 
 
-
-# Start :)
-print("-=Inode Searcher for EXT4=-")
-if (len(sys.argv)<3): errorMsg()
-main(sys.argv)
+# need this if to not execute code while importing it inside
+# ext4_inode_checksum_calculator
+if __name__ == "__main__":
+    # Start :)
+    print("-=Inode Searcher for EXT4=-")
+    if (len(sys.argv)<3): errorMsg()
+    main(sys.argv)

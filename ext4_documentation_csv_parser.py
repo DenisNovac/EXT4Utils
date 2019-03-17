@@ -8,8 +8,10 @@
 # for example, be sure to delete all one-row hints from it
 # do not insert in it DESCRIPTIONS, only three field: offset, length and name!
 
+import sys
 # my prepared file with csv
 CSV_PATH="superblock_csv_example.csv"
+
 def parseCSV ( path ):
     offsets = [ ]
     lengths = [ ]
@@ -39,6 +41,11 @@ def parseCSV ( path ):
         if length=="__le16": length=2
         if length=="__u8": length=1
         if length=="char": length=1
+        # lengths from inode documentation
+        if length=="4 bytes":length=4
+        if length=="60 bytes":length=60
+        if length=="12 bytes":length=12
+
 
         new_name=""
         mult_length=""
@@ -60,12 +67,13 @@ def parseCSV ( path ):
     f.close()
 
     # this will give you a list of names to place it in some array
-    '''
+
     string_variables=""
     for s in names:
         string_variables=string_variables+s+","
+    string_variables=string_variables[0:len(string_variables)-1]
     print(string_variables)
-    '''
+
 
     # this field must give out the size of your block from documentation
     sum=0
@@ -74,5 +82,12 @@ def parseCSV ( path ):
     print("PARSED LENGTH: "+str(sum))
     print("")
 
+    # this is for creating variables
+    for i in range(len(names)):
+        print(names[i]+" = "+str(lengths[i]))
 
-parseCSV(CSV_PATH)
+# need this if to not execute code while importing it inside
+# ext4_inode_checksum_calculator
+if __name__ == "__main__":
+    if len(sys.argv)>0: CSV_PATH=sys.argv[1]
+    parseCSV(CSV_PATH)
