@@ -115,35 +115,38 @@ def findInodeTableOffset ( pathToDevice, inodeNum, sb_info ):
     s_inodes_per_group=sb_info[1]
     block_size=sb_info[3]
 
-    # group number is always lesser integer
+    # group number is always lesser integer of the fraction
     groupNumber=(inodeNum-1)/s_inodes_per_group
     groupNumber=int(math.floor(groupNumber))
 
-    # find place where inode table offset is written
-    inodeTableAddress=groupNumber*64+block_size
+    # find offset to the group descriptor (size is 64 bytes) of the group
+    groupDescriptorOffset=groupNumber*64+block_size
 
-    # now we need to jump to this offset to find the offset with inode table
-    # where our inode is stored
+    # now we need to jump to this offset in group descriptor
+    # to find the offset with inode table where our inode is stored
     file=open(pathToDevice,"r")
-    file.seek(inodeTableAddress)
-    bytes=file.read(0x8+0x28)
+    file.seek(groupDescriptorOffset)
+
+    # inode table offets in group descriptor:
+    # 0x8 	__le32 	bg_inode_table_lo
+    # 0x28 	__le32 	bg_inode_table_hi
+    bytes=file.read(0x28+4) # read all descriptor up to high inode table offset
     file.close()
     #print(bytes.encode('hex'))
 
-    # here we read high and low parts for number of block with inode inode
-    # where our inode stored
+    # here we read high and low parts for offset to inode table where
+    # our inode stored
     bg_inode_table_lo=bytes[0x8:0x8+4]
     bg_inode_table_hi=bytes[0x28:0x28+4]
 
-    # here we make one number from parts in BIG ENDIAN (we used reversed)
+    # make one number from parts in BIG ENDIAN (we used reversed)
     bg_inode_table=list(reversed(bg_inode_table_hi))+list(reversed(bg_inode_table_lo))
     inode_table_block_string="".join(bg_inode_table)
 
     # converting it to integer
     inode_table_block=struct.unpack(">Q",inode_table_block_string)
 
-    # making absolute offset to a block where inode table with needed
-    # inode starts
+    # making absolute offset to inode table with needed inode
     inode_table_offset=inode_table_block[0]*block_size
 
     return inode_table_offset
