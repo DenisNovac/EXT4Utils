@@ -27,6 +27,10 @@ INODE_OFFSET=None
 GROUP_NUMBER=None
 GROUP_DESCRIPTOR_OFFSET=None
 BLOCKS_PER_GROUP=None
+# output of the program
+DATA_BLOCKS= [ ]
+
+
 
 # copy of function from ext4_raw_inode_searcher
 def toNumber ( hexList ):
@@ -41,6 +45,7 @@ def toNumber ( hexList ):
     # unpack gives list such as (2,0), we need only first number.
     out=int(out[0])
     return out
+
 
 
 def call_inode_searcher():
@@ -76,9 +81,7 @@ def call_inode_searcher():
 
 
 
-def find_data_blocks():
-    data_blocks=[ ]
-
+def find_extent_tree():
     s_creator_os=RAW_SUPERBLOCK[0x48:0x48+4]
     if not toNumber(s_creator_os)==0:
         print("This program is only for Linux (s_creator_os=0). Terminating.")
@@ -90,8 +93,6 @@ def find_data_blocks():
     # this variable is 512-byte blocks on the disk, not actual 4096-byte blocks!!!
     i_blocks_amount=struct.unpack(">q",i_blocks)[0]*512/BLOCK_SIZE
     print("Blocks of the file: "+str(i_blocks_amount))
-
-
 
     i_block_table_offset=0x28
     i_block_table_length=60
@@ -108,63 +109,86 @@ def find_data_blocks():
         print("Your file system is not ext4 or not using Extent Tree.\nMagic number (0xF30A) not correct.\nTerminated.")
         exit (-1)
     
-    print("\nExtent header:")
-    extent_header=extent_tree[0:0x8+4]
-    print(extent_header.encode("hex"))
-    # amount of blocks used by inode
-    eh_entries=toNumber( extent_tree[0x2:0x2+2] )
-    print("Valid entries following the header: "+ str(eh_entries)+".")
+    extent_tree_list= [ ]
+    print("\nExtent tree entries:")
+    for i in range(0,len(extent_tree),12):
+        extent_tree_list.append(extent_tree[i:i+12])
+
+    process_extent_tree( extent_tree_list )
+    return None
+
+
+
+def process_extent_tree ( extent_tree_list ):
+    for i in range(0,5):
+        print("["+str(i)+"] "+extent_tree_list[i].encode('hex'))
+
+    print("\nExtent header (Entry 0):")
+    extent_header=extent_tree_list[0]
+    print("\t"+extent_header.encode("hex"))
+
+    # It's seems like this will count ONLY INTERNAL NODES if depth>0
+    eh_entries=toNumber( extent_header[0x2:0x2+2] )
+    print("\tValid entries following the header: "+ str(eh_entries))
+
+    eh_max=toNumber( extent_header[0x4:0x4+2] )
+    print("\tMaximum valid entries following the header: "+ str(eh_max))
     # depth = 0 means that this extend node points to data blocks
-    eh_depth=toNumber( extent_tree[0x6:0x6+2] )
-    print("Extent depth is: "+str(eh_depth)+".")
-
-    if eh_depth==0:
-        print("This is a 'leaf node' (extent depth=0). Header is followed by eh.entries of struct ext4_extent.")
+    eh_depth=toNumber( extent_header[0x6:0x6+2] )
+    print("\tExtent depth is: "+str(eh_depth)+".\n")
+    
+    processed=1
+    if not eh_depth==0:
         for i in range(1,eh_entries+1):
-            print("\nEntry: "+str(i))
-            entry=extent_tree[0x8+4+12*(i-1):0x8+4+12*i]
-            print("\t"+entry.encode("hex"))
-            print("\tee_block (first file block number that this extent covers in little-endian): "+entry[0x0:0x0+4].encode('hex'))
-            print("\tee_len (number of block covered by extent in little-endian -> blocks in a row): "+entry[0x4:0x4+2].encode('hex'))
-            ee_len=toNumber(entry[0x4:0x4+2])
-            print("\tee_len (integer): "+str(ee_len))
-
-            # all in little-endian
-            ee_start_hi=entry[0x6:0x6+2]
-            ee_start_lo=entry[0x8:0x8+4]
-            # high bytes in big-endian goes left
-            
-            ee_start_sum_little_endian=ee_start_hi+ee_start_lo
-            print("\tee_start (lo+hi in little-endian): "+ee_start_sum_little_endian.encode("hex"))
-            
-            zeroes="\x00\x00"
-            ee_start_sum=zeroes+ee_start_hi[::-1]+ee_start_lo[::-1]
-            print("\tee_start (0x0000+hi+lo in big-endian): "+ee_start_sum.encode("hex"))
-            
-            print ("\n\tData blocks of extent:")
-            first_block_of_extent=struct.unpack(">q",ee_start_sum)[0]
-            for i in range(0,ee_len):
-                data_blocks.append(first_block_of_extent+i)
-                print("\t"+str(first_block_of_extent+i))
-
-    else: 
-        print("This is an 'interior node' (depth>0). Wait for updates.")
-        exit (-1)
-
-    if not len(data_blocks)==i_blocks_amount:
-        print("WARNING!")
-        print("INODE BLOCKS NUMBER IS "+str(i_blocks_amount)+" BUT DETECTED BLOCKS NUMBER IS "+str(len(data_blocks)))
-        print("USE sudo debugfs /dev/sdX -R 'blocks /X' TO CHECK THE OUTPUT!")
-
-    print("\nDetected file's data blocks:")
-    print (data_blocks)
+            print("Depth entry "+str(processed)+":")
+            process_internal_node(extent_tree_list[i])
+            processed=processed+1
     print("\n")
-
+    while not processed==5:
+        if extent_tree_list[processed]=="\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00": break
+        print("Entry "+str(processed)+":")
+        leaf_node_blocks(extent_tree_list[processed])
+        processed=processed+1
 
     return None
 
 
 
+# entry is a valid 12-bytes struct ext4_extent_idx (internal node)
+def process_internal_node ( internal_node_entry ):
+    print("\t"+internal_node_entry.encode('hex'))
+
+
+
+# entry is a valid 12-bytes struct ext4_extent (leaf node)
+def leaf_node_blocks( entry ):
+    global DATA_BLOCKS
+    print("\t"+entry.encode("hex"))
+    print("\tee_block (first file block number that this extent covers in little-endian): "+entry[0x0:0x0+4].encode('hex'))
+    print("\tee_len (number of block covered by extent in little-endian -> blocks in a row): "+entry[0x4:0x4+2].encode('hex'))
+    ee_len=toNumber(entry[0x4:0x4+2])
+    print("\tee_len (integer): "+str(ee_len))
+
+    # all in little-endian
+    ee_start_hi=entry[0x6:0x6+2]
+    ee_start_lo=entry[0x8:0x8+4]
+    # high bytes in big-endian goes left
+    
+    ee_start_sum_little_endian=ee_start_hi+ee_start_lo
+    print("\tee_start (lo+hi in little-endian): "+ee_start_sum_little_endian.encode("hex"))
+    
+    zeroes="\x00\x00"
+    ee_start_sum=zeroes+ee_start_hi[::-1]+ee_start_lo[::-1]
+    print("\tee_start (0x0000+hi+lo in big-endian): "+ee_start_sum.encode("hex"))
+    
+    #print ("\n\tData blocks of extent:")
+    first_block_of_extent=struct.unpack(">q",ee_start_sum)[0]
+    for i in range(0,ee_len):
+        DATA_BLOCKS.append(first_block_of_extent+i)
+        #print("\t"+str(first_block_of_extent+i))
+    print ("\n\tDetected blocks range: "+str(first_block_of_extent)+" - " +str(first_block_of_extent+ee_len-1))
+
+    return None
 
 
 
@@ -173,12 +197,7 @@ def main():
     print ("Global inode offset: "+str(INODE_OFFSET))
     print ("Global group number: "+str(GROUP_NUMBER))
     print ("Global group descriptor offset: "+str(GROUP_DESCRIPTOR_OFFSET))
-    find_data_blocks()
-    
-    #read_direct_address_blocks(sys.argv[2],i_block_array)
-
-
-
+    find_extent_tree()
 
 
 
